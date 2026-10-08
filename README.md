@@ -162,11 +162,24 @@ update can't break it: `docker image inspect --format '{{index .RepoDigests 0}}'
 
 | Symptom | Fix |
 |---|---|
+| "request (N tokens) exceeds the available context size" | Uploads plus question are bigger than `LLM_CTX`. See "Context too small" below. |
 | A container restarts / "Killed" in logs | Out of RAM. Add swap (§1), use the 2B preset, lower `LLM_CTX` to 4096 in `.env`. |
 | Very slow replies | Normal on CPU for long prompts. Use 2B, keep uploads small, check `make ps` for other busy containers. Try `LLM_THREADS=4` (physical cores) in `.env`. |
 | `illegal instruction` from llama | CPU lacks instructions the image expects; `make check` shows AVX2 support. Build llama.cpp locally for that CPU. |
 | Model writes JSON instead of calling a tool | Small models are less reliable at tool calling: use the 4B preset, and Function Calling = Native on the model. |
 | "needs OCR" error on a PDF | Scanned PDFs need Docling, which is off in the cpu profile. Turn it on with `COMPOSE_PROFILES=docling`, `CONTENT_EXTRACTION_ENGINE=docling` and `TOOLS_DOCLING_URL=http://docling:5001` in `.env` if you have 12 GB+ RAM. |
+
+#### Context too small
+
+The model can only read `LLM_CTX` tokens at once (16,384 on the cpu presets). Uploaded documents are
+searched and only matching passages are sent, but several large files can still exceed it.
+1. In Open WebUI, **Admin Panel → Settings → Documents**: set **Top K** to 3 and make sure
+   **Full Context Mode** is off. **Admin Panel → Settings → Interface**: turn off
+   **Retrieval Query Generation**. (Open WebUI keeps these in its database, so changes to `.env`
+   only apply to a fresh install.)
+2. In the chat, click an attached file and choose **Focused Retrieval**, not **Using Entire Document**.
+3. If you have RAM to spare, raise `LLM_CTX` (e.g. 24576) in `.env` and run `make up`.
+   Each extra 8k costs roughly 0.5–1 GB RAM, and long prompts take minutes to read on a CPU.
 
 ### Tesla T4
 

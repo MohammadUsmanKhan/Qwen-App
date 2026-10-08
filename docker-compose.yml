@@ -151,6 +151,12 @@ services:
       ENABLE_TAGS_GENERATION: ${ENABLE_BACKGROUND_TASKS:-true}
       ENABLE_FOLLOW_UP_GENERATION: ${ENABLE_BACKGROUND_TASKS:-true}
       ENABLE_AUTOCOMPLETE_GENERATION: "false"
+      # Before searching uploads, Open WebUI asks the LLM to write search queries.
+      # Off on CPU: it costs an extra LLM call and pulls in 2-3x more text.
+      ENABLE_RETRIEVAL_QUERY_GENERATION: ${ENABLE_BACKGROUND_TASKS:-true}
+      ENABLE_SEARCH_QUERY_GENERATION: ${ENABLE_BACKGROUND_TASKS:-true}
+      # Send matching passages, never whole documents (keeps prompts within context).
+      RAG_FULL_CONTEXT: "false"
       AIOHTTP_CLIENT_TIMEOUT: "900"
       AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA: "60"
     depends_on:
