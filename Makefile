@@ -4,7 +4,7 @@ SHELL := /bin/bash
 # (set by `make profile`), so plain `docker compose ...` commands work too.
 COMPOSE := docker compose
 
-.PHONY: help init profile check model use up down restart logs ps bench test lint
+.PHONY: help init profile check model use up down restart logs ps doctor bench test lint
 
 help:  ## show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS=":.*## "} {printf "  make %-10s %s\n", $$1, $$2}'
@@ -50,6 +50,9 @@ ps:  ## service status and GPU memory
 	$(COMPOSE) ps
 	@nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv 2>/dev/null || true
 	@docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.CPUPerc}}' 2>/dev/null || true
+
+doctor:  ## collect status, logs and a direct model test for troubleshooting
+	@scripts/doctor.sh 2>&1 | tee data/doctor.txt; echo; echo "Saved to data/doctor.txt"
 
 bench:  ## benchmark the LLM (speed, VRAM, tool calling, vision)
 	python3 scripts/bench_llm.py --json data/bench-$$(date +%Y%m%d-%H%M).json
