@@ -48,6 +48,9 @@ print("speed:     prompt %.1f tok/s, generation %.1f tok/s" % (t.get("prompt_per
 '
 echo "took $(( $(date +%s) - start ))s"
 
+section "llama context and memory (from startup log)"
+docker compose logs --no-color llama 2>&1 | grep -iE 'n_ctx|kv.?cache|KV self|recurrent|buffer size|model size|n_ctx_train' | tail -n 15
+
 section "llama logs (last 60 lines)"
 docker compose logs --no-color --tail=60 llama 2>&1
 section "open-webui logs (errors, last 30)"

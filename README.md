@@ -178,8 +178,10 @@ searched and only matching passages are sent, but several large files can still 
    **Retrieval Query Generation**. (Open WebUI keeps these in its database, so changes to `.env`
    only apply to a fresh install.)
 2. In the chat, click an attached file and choose **Focused Retrieval**, not **Using Entire Document**.
-3. If you have RAM to spare, raise `LLM_CTX` (e.g. 24576) in `.env` and run `make up`.
-   Each extra 8k costs roughly 0.5–1 GB RAM, and long prompts take minutes to read on a CPU.
+3. Raise `LLM_CTX` in `.env` and run `make up`. The cpu presets use 32768 (2B) and 16384 (4B);
+   Qwen3.5 itself supports ~262k. `make doctor` shows the context's memory use ("KV cache" lines)
+   and free RAM — raise it while a few GB stay free. On a 4-core CPU a full 32k prompt already
+   takes several minutes to read, so bigger windows mostly mean longer waits.
 
 ### Tesla T4
 
