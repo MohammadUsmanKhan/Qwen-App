@@ -1,0 +1,12 @@
+# Layout B: main LLM on GPU 0 only; GPU 1 is left for the image service (Phase 7).
+#   scripts/use_model.sh qwen36-35b-a3b-cpumoe     # or a smaller model preset
+#   docker compose -f docker-compose.yml -f docker-compose.gpu-split.yml up -d
+services:
+  llama:
+    deploy:
+      resources:
+        reservations:
+          devices: !override
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]

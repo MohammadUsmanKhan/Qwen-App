@@ -1,6 +1,9 @@
 # Build plan: self-hosted Qwen agent chat on 2× Tesla T4
 
-Status: **proposal, waiting for confirmation before Phase 1 code is written.**
+Status: **Phases 1–3 built** (see `docs/phases/`); they need a run on the T4 server before Phase 4.
+
+Defaults assumed when the open questions (§7) weren't answered: Ubuntu 22.04/24.04 with driver ≥ 550 and
+NVIDIA Container Toolkit (verified by `make check`), LAN-only access, Qwen-Image-Edit-2511, Brave search.
 Source brief: the "Self-Hosted AI Agent Chat App" build prompt.
 
 ---

@@ -1,0 +1,149 @@
+# Self-hosted Qwen agent stack.  Start: docker compose up -d   (see README)
+# Layout A (default): the main LLM is split across both T4s.
+# Layout B: add -f docker-compose.gpu-split.yml (LLM on GPU 0, GPU 1 free for images).
+
+name: qwen-app
+
+services:
+  # ------------------------------------------------------------ main LLM
+  llama:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LLM_PORT:-8080}:8080"
+    volumes:
+      - ./models:/models:ro
+    environment:
+      LLM_ALIAS: ${LLM_ALIAS}
+      LLM_MODEL_FILE: ${LLM_MODEL_FILE:?run scripts/download_model.sh first}
+      LLM_MMPROJ_FILE: ${LLM_MMPROJ_FILE:-}
+      LLM_CTX: ${LLM_CTX:-32768}
+      LLM_PARALLEL: ${LLM_PARALLEL:-2}
+      LLM_TENSOR_SPLIT: ${LLM_TENSOR_SPLIT:-1,1}
+      LLM_N_GPU_LAYERS: ${LLM_N_GPU_LAYERS:-999}
+      LLM_FLASH_ATTN: ${LLM_FLASH_ATTN:-on}
+      LLM_CACHE_TYPE_K: ${LLM_CACHE_TYPE_K:-q8_0}
+      LLM_CACHE_TYPE_V: ${LLM_CACHE_TYPE_V:-q8_0}
+      LLM_EXTRA_ARGS: ${LLM_EXTRA_ARGS:-}
+    # --jinja enables the model's chat template, which is what makes OpenAI-style
+    # tool calling work. --mmproj adds image input. -fa uses llama.cpp's own
+    # flash-attention kernel (works on Turing; this is not FlashAttention 2).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        MMPROJ=""
+        if [ -n "$$LLM_MMPROJ_FILE" ]; then MMPROJ="--mmproj /models/$$LLM_MMPROJ_FILE"; fi
+        set -x
+        exec /app/llama-server \
+          --host 0.0.0.0 --port 8080 \
+          --model "/models/$$LLM_MODEL_FILE" $$MMPROJ \
+          --alias "$$LLM_ALIAS" \
+          --ctx-size "$$LLM_CTX" --parallel "$$LLM_PARALLEL" \
+          --n-gpu-layers "$$LLM_N_GPU_LAYERS" \
+          --split-mode layer --tensor-split "$$LLM_TENSOR_SPLIT" \
+          -fa "$$LLM_FLASH_ATTN" \
+          --cache-type-k "$$LLM_CACHE_TYPE_K" --cache-type-v "$$LLM_CACHE_TYPE_V" \
+          --jinja --metrics \
+          $$LLM_EXTRA_ARGS
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 300s   # loading ~22 GB from disk can take minutes
+
+  # ------------------------------------------------------------ document extraction
+  docling:
+    image: ${DOCLING_IMAGE:-quay.io/docling-project/docling-serve-cpu:latest}
+    restart: unless-stopped
+    environment:
+      DOCLING_SERVE_ENABLE_UI: "false"
+      # Large scanned PDFs with OCR take a while on CPU.
+      DOCLING_SERVE_MAX_SYNC_WAIT: "600"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
+  # ------------------------------------------------------------ tool server
+  tools:
+    build: ./services/tools
+    restart: unless-stopped
+    ports:
+      - "${TOOLS_PORT:-8001}:8000"
+    volumes:
+      - ./data/tools:/data
+      # Read-only view of Open WebUI's data so tools can open files users uploaded.
+      - ./data/open-webui:/owui:ro
+    environment:
+      TOOLS_API_KEY: ${TOOLS_API_KEY:?set TOOLS_API_KEY in .env}
+      TOOLS_SIGNING_KEY: ${TOOLS_SIGNING_KEY:?set TOOLS_SIGNING_KEY in .env}
+      TOOLS_PUBLIC_URL: ${TOOLS_PUBLIC_URL:-http://localhost:8001}
+      TOOLS_LINK_TTL_HOURS: ${TOOLS_LINK_TTL_HOURS:-168}
+      TOOLS_DATA_DIR: /data
+      TOOLS_OWUI_DATA_DIR: /owui
+      TOOLS_DOCLING_URL: http://docling:5001
+      TOOLS_LLM_URL: http://llama:8080/v1
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      docling:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ------------------------------------------------------------ chat UI
+  open-webui:
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
+    restart: unless-stopped
+    ports:
+      - "${WEBUI_PORT:-3000}:8080"
+    volumes:
+      - ./data/open-webui:/app/backend/data
+    # NOTE: Open WebUI stores most of these in its database on first start.
+    # After that, change them in Admin Settings (or delete the setting there).
+    environment:
+      WEBUI_NAME: ${WEBUI_NAME:-Qwen Workspace}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?set WEBUI_SECRET_KEY in .env}
+      ENABLE_SIGNUP: ${ENABLE_SIGNUP:-true}
+      # LLM
+      ENABLE_OLLAMA_API: "false"
+      OPENAI_API_BASE_URL: http://llama:8080/v1
+      OPENAI_API_KEY: none
+      # RAG: Docling extraction (OCR on) + Qwen3-Embedding on CPU
+      CONTENT_EXTRACTION_ENGINE: docling
+      DOCLING_SERVER_URL: http://docling:5001
+      DOCLING_PARAMS: '{"do_ocr": true, "force_ocr": false, "ocr_engine": "easyocr", "pdf_backend": "dlparse_v4", "table_mode": "accurate"}'
+      RAG_EMBEDDING_ENGINE: ""
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      RAG_TOP_K: "8"
+      CHUNK_SIZE: "1200"
+      CHUNK_OVERLAP: "150"
+      # Tool server: user id/name headers let tools find that user's uploads.
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+      TOOL_SERVER_CONNECTIONS: >-
+        [{"type": "openapi", "url": "http://tools:8000", "path": "openapi.json",
+          "auth_type": "bearer", "key": "${TOOLS_API_KEY}",
+          "config": {"enable": true},
+          "info": {"name": "Workspace tools", "description": "Read files and create Word, PowerPoint and Excel files"}}]
+      AIOHTTP_CLIENT_TIMEOUT: "900"
+      AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA: "60"
+    depends_on:
+      llama:
+        condition: service_started
+      tools:
+        condition: service_started
+      docling:
+        condition: service_started
