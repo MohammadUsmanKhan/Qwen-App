@@ -62,27 +62,33 @@ async def extract(
                 "This is OCR text only. To understand the picture itself, the user should attach "
                 "the image to the chat message so you can see it directly."
             )
+        if not docling_url:  # Docling is switched off in this hardware profile
+            return _fallback(path, filename, ext, kind, notes, reason="Docling is not enabled on this server")
         try:
             md = await docling.convert(
                 docling_url, path, filename, ocr=True, force_ocr=force_ocr, timeout=docling_timeout
             )
             return Extracted(kind, md, "docling", notes)
         except (httpx.HTTPError, ToolError) as e:
-            fallback = LOCAL_FALLBACK.get(ext)
-            if fallback is None:
-                raise ToolError(
-                    "extraction_failed",
-                    f"Could not extract text from {filename}: {e}",
-                    "The document service may be down; try again shortly.",
-                ) from e
             log.warning("docling failed for %s (%s); using local fallback", filename, e)
-            md = fallback(path)
-            notes.append("Extracted with the basic fallback reader (no OCR, simplified layout).")
-            if ext == ".pdf" and len(md.strip()) < 50 * max(1, md.count("## Page")):
-                notes.append("Very little text found — this may be a scanned PDF that needs OCR.")
-            return Extracted(kind, md, "fallback", notes)
+            return _fallback(path, filename, ext, kind, notes, reason=f"the document service failed ({e})")
     raise ToolError(
         "unsupported_type",
         f"Files of type '{ext or 'unknown'}' can't be read.",
         "Supported: PDF, DOCX, PPTX, XLSX/XLS, CSV/TSV, HTML, TXT/MD/JSON, and images (OCR).",
     )
+
+
+def _fallback(path: Path, filename: str, ext: str, kind: str, notes: list[str], reason: str) -> Extracted:
+    reader = LOCAL_FALLBACK.get(ext)
+    if reader is None:  # images need OCR, which only Docling provides
+        raise ToolError(
+            "extraction_failed",
+            f"Can't extract text from {filename}: {reason}, and this file type needs OCR.",
+            "If the user wants you to look at the image, ask them to attach it to their chat message.",
+        )
+    md = reader(path)
+    notes.append("Extracted with the basic built-in reader (no OCR, simplified layout).")
+    if ext == ".pdf" and len(md.strip()) < 50 * max(1, md.count("## Page")):
+        notes.append("Very little text found — this may be a scanned PDF that needs OCR (not available here).")
+    return Extracted(kind, md, "fallback", notes)

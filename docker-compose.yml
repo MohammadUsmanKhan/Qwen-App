@@ -1,6 +1,10 @@
-# Self-hosted Qwen agent stack.  Start: docker compose up -d   (see README)
-# Layout A (default): the main LLM is split across both T4s.
-# Layout B: add -f docker-compose.gpu-split.yml (LLM on GPU 0, GPU 1 free for images).
+# Self-hosted Qwen agent stack.  Start: make up   (see README)
+#
+# Hardware profiles (make profile P=...) choose which override files are used,
+# via COMPOSE_FILE in .env:
+#   t4x2       this file only: main LLM split across both T4s
+#   t4-split   + docker-compose.gpu-split.yml: LLM on GPU 0, GPU 1 free for images
+#   cpu        + docker-compose.cpu.yml: no GPU, small model, Docling off
 
 name: qwen-app
 
@@ -19,7 +23,8 @@ services:
       LLM_MMPROJ_FILE: ${LLM_MMPROJ_FILE:-}
       LLM_CTX: ${LLM_CTX:-32768}
       LLM_PARALLEL: ${LLM_PARALLEL:-2}
-      LLM_TENSOR_SPLIT: ${LLM_TENSOR_SPLIT:-1,1}
+      LLM_TENSOR_SPLIT: ${LLM_TENSOR_SPLIT:-}
+      LLM_THREADS: ${LLM_THREADS:-}
       LLM_N_GPU_LAYERS: ${LLM_N_GPU_LAYERS:-999}
       LLM_FLASH_ATTN: ${LLM_FLASH_ATTN:-on}
       LLM_CACHE_TYPE_K: ${LLM_CACHE_TYPE_K:-q8_0}
@@ -32,16 +37,17 @@ services:
     command:
       - |
         set -e
-        MMPROJ=""
-        if [ -n "$$LLM_MMPROJ_FILE" ]; then MMPROJ="--mmproj /models/$$LLM_MMPROJ_FILE"; fi
+        OPTS=""
+        if [ -n "$$LLM_MMPROJ_FILE" ]; then OPTS="$$OPTS --mmproj /models/$$LLM_MMPROJ_FILE"; fi
+        if [ -n "$$LLM_TENSOR_SPLIT" ]; then OPTS="$$OPTS --split-mode layer --tensor-split $$LLM_TENSOR_SPLIT"; fi
+        if [ -n "$$LLM_THREADS" ]; then OPTS="$$OPTS --threads $$LLM_THREADS"; fi
         set -x
         exec /app/llama-server \
           --host 0.0.0.0 --port 8080 \
-          --model "/models/$$LLM_MODEL_FILE" $$MMPROJ \
+          --model "/models/$$LLM_MODEL_FILE" $$OPTS \
           --alias "$$LLM_ALIAS" \
           --ctx-size "$$LLM_CTX" --parallel "$$LLM_PARALLEL" \
           --n-gpu-layers "$$LLM_N_GPU_LAYERS" \
-          --split-mode layer --tensor-split "$$LLM_TENSOR_SPLIT" \
           -fa "$$LLM_FLASH_ATTN" \
           --cache-type-k "$$LLM_CACHE_TYPE_K" --cache-type-v "$$LLM_CACHE_TYPE_V" \
           --jinja --metrics \
@@ -61,8 +67,12 @@ services:
       start_period: 300s   # loading ~22 GB from disk can take minutes
 
   # ------------------------------------------------------------ document extraction
+  # Optional (needs ~2-3 GB RAM): enabled by COMPOSE_PROFILES=docling in .env.
+  # Without it, uploads use Open WebUI's built-in extractor and the tool server's
+  # local readers (no OCR for scanned PDFs).
   docling:
     image: ${DOCLING_IMAGE:-quay.io/docling-project/docling-serve-cpu:latest}
+    profiles: ["docling"]
     restart: unless-stopped
     environment:
       DOCLING_SERVE_ENABLE_UI: "false"
@@ -92,12 +102,9 @@ services:
       TOOLS_LINK_TTL_HOURS: ${TOOLS_LINK_TTL_HOURS:-168}
       TOOLS_DATA_DIR: /data
       TOOLS_OWUI_DATA_DIR: /owui
-      TOOLS_DOCLING_URL: http://docling:5001
+      TOOLS_DOCLING_URL: ${TOOLS_DOCLING_URL-http://docling:5001}
       TOOLS_LLM_URL: http://llama:8080/v1
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    depends_on:
-      docling:
-        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
@@ -123,12 +130,12 @@ services:
       OPENAI_API_BASE_URL: http://llama:8080/v1
       OPENAI_API_KEY: none
       # RAG: Docling extraction (OCR on) + Qwen3-Embedding on CPU
-      CONTENT_EXTRACTION_ENGINE: docling
+      CONTENT_EXTRACTION_ENGINE: ${CONTENT_EXTRACTION_ENGINE-docling}
       DOCLING_SERVER_URL: http://docling:5001
       DOCLING_PARAMS: '{"do_ocr": true, "force_ocr": false, "ocr_engine": "easyocr", "pdf_backend": "dlparse_v4", "table_mode": "accurate"}'
       RAG_EMBEDDING_ENGINE: ""
       RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
-      RAG_TOP_K: "8"
+      RAG_TOP_K: ${RAG_TOP_K:-8}
       CHUNK_SIZE: "1200"
       CHUNK_OVERLAP: "150"
       # Tool server: user id/name headers let tools find that user's uploads.
@@ -138,12 +145,16 @@ services:
           "auth_type": "bearer", "key": "${TOOLS_API_KEY}",
           "config": {"enable": true},
           "info": {"name": "Workspace tools", "description": "Read files and create Word, PowerPoint and Excel files"}}]
+      # Extra LLM calls Open WebUI makes after each message. Turned off on slow
+      # CPU-only machines (cpu profile) so the model only answers the user.
+      ENABLE_TITLE_GENERATION: ${ENABLE_BACKGROUND_TASKS:-true}
+      ENABLE_TAGS_GENERATION: ${ENABLE_BACKGROUND_TASKS:-true}
+      ENABLE_FOLLOW_UP_GENERATION: ${ENABLE_BACKGROUND_TASKS:-true}
+      ENABLE_AUTOCOMPLETE_GENERATION: "false"
       AIOHTTP_CLIENT_TIMEOUT: "900"
       AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA: "60"
     depends_on:
       llama:
         condition: service_started
       tools:
-        condition: service_started
-      docling:
         condition: service_started

@@ -33,14 +33,19 @@ T4 risks to test early:
 
 ---
 
-## 2. GPU layouts (config switch `GPU_LAYOUT`)
+## 2. Hardware profiles and GPU layouts (`make profile P=...`)
 
-**A — `shared` (default):** LLM split across GPU 0+1. Image jobs go through the
+**`cpu` — testing on a small PC (no GPU, 8 GB RAM):** llama.cpp CPU image, Qwen3.5-2B or 4B Q4 with
+vision (`mmproj`), 8k context, thinking off; Docling off (built-in extractors, no OCR); MiniLM embeddings;
+Open WebUI's background LLM calls off. Same tools and API, so everything except OCR and speed can be
+tested before the T4 server is available.
+
+**A — `t4x2` (default on the server):** LLM split across GPU 0+1. Image jobs go through the
 GPU scheduler: drain LLM requests → stop `llama` container → run ComfyUI job →
 free VRAM → restart `llama` → health check. Cost: ~30–60 s model reload per image
 batch (measured in Phase 7). Image jobs are batched in the queue to amortise this.
 
-**B — `split`:** GPU 0 = LLM, GPU 1 = ComfyUI resident. Two options for the LLM:
+**B — `t4-split`:** GPU 0 = LLM, GPU 1 = ComfyUI resident. Two options for the LLM:
 - B1: a smaller model (~8–14B Q4) fully on GPU 0, as in the brief.
 - B2: keep Qwen3.6-35B-A3B but use llama.cpp `--n-cpu-moe N` to keep attention +
   shared weights on GPU 0 and push expert weights to system RAM. Keeps the big
@@ -71,7 +76,8 @@ Generated files land in the `data` volume and are served by the tool server at
 ```
 .
 ├── docker-compose.yml          # base stack
-├── docker-compose.gpu-split.yml# override for layout B
+├── docker-compose.gpu-split.yml# override for layout B (t4-split profile)
+├── docker-compose.cpu.yml      # override for CPU-only PCs (cpu profile)
 ├── .env.example                # all config (model paths, ports, API keys)
 ├── Makefile                    # up / down / logs / bench / test / backup
 ├── README.md
@@ -85,7 +91,8 @@ Generated files land in the `data` volume and are served by the tool server at
 │   ├── bench_llm.py            # tokens/s, TTFT, VRAM per context size
 │   └── backup_data.sh
 ├── config/
-│   ├── llama/                  # per-model launch presets (qwen36-35b-a3b.env, qwen38-27b.env…)
+│   ├── profiles/               # hardware profiles: cpu, t4x2, t4-split
+│   ├── llama/                  # per-model launch presets (qwen36-35b-a3b.env, qwen35-2b-cpu.env…)
 │   ├── open-webui/             # tool-server registration, model presets
 │   ├── prompts/system.md       # agent system prompt (§7 of the brief)
 │   └── brands/                 # brand profiles (yaml + logos)

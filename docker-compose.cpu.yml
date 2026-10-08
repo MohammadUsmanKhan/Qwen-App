@@ -1,0 +1,8 @@
+# CPU-only override (no NVIDIA GPU), e.g. a small office PC for testing.
+# Selected by `make profile P=cpu` (sets COMPOSE_FILE in .env).
+services:
+  llama:
+    image: ${LLAMA_CPU_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    deploy: !reset {}
+    healthcheck:
+      start_period: 120s

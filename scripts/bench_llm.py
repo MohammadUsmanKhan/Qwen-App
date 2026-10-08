@@ -7,6 +7,9 @@ Standard library only, so it runs on the host without installing anything.
 
     python3 scripts/bench_llm.py                      # http://127.0.0.1:8080
     python3 scripts/bench_llm.py --url http://host:8080 --sizes 512,8000,24000
+
+Without an NVIDIA GPU it uses shorter prompts (256, 2000 tokens) and reports system RAM
+instead of VRAM, so a run on a small CPU-only PC finishes in a few minutes.
     python3 scripts/bench_llm.py --json results.json
 """
 
@@ -60,6 +63,25 @@ def vram() -> list[dict[str, Any]]:
     return gpus
 
 
+def ram() -> str:
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, value = line.split(":", 1)
+                info[key] = int(value.split()[0])
+        used = (info["MemTotal"] - info["MemAvailable"]) / 1024 / 1024
+        return f"{used:.1f}/{info['MemTotal'] / 1024 / 1024:.1f} GB RAM"
+    except (OSError, KeyError, ValueError):
+        return "n/a"
+
+
+def mem_summary(gpus: list[dict[str, Any]]) -> str:
+    if gpus:
+        return " ".join(f"GPU{g['gpu']}:{g['used_mib']}MiB" for g in gpus)
+    return ram()
+
+
 def tokenize_len(base: str, text: str) -> int:
     return len(post(f"{base}/tokenize", {"content": text})["tokens"])
 
@@ -105,6 +127,7 @@ def bench_size(base: str, model: str, size: int, gen: int) -> dict[str, Any]:
         "gen_tok_s": round(t.get("predicted_per_second", 0), 1),
         "ttft_s": round(ttft, 2),
         "vram": vram(),
+        "ram": ram(),
     }
 
 
@@ -171,11 +194,14 @@ def check_vision(base: str, model: str) -> tuple[bool, str]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://127.0.0.1:8080")
-    ap.add_argument("--sizes", default="512,4000,16000", help="prompt sizes in tokens")
-    ap.add_argument("--gen", type=int, default=256, help="tokens to generate per run")
+    ap.add_argument("--sizes", help="prompt sizes in tokens (default 512,4000,16000; 256,2000 without a GPU)")
+    ap.add_argument("--gen", type=int, help="tokens to generate per run (default 256; 128 without a GPU)")
     ap.add_argument("--json", help="write results to this file")
     args = ap.parse_args()
     base = args.url.rstrip("/")
+    has_gpu = bool(vram())
+    sizes = args.sizes or ("512,4000,16000" if has_gpu else "256,2000")
+    gen = args.gen or (256 if has_gpu else 128)
 
     try:
         get(f"{base}/health")
@@ -186,17 +212,17 @@ def main() -> int:
     model = get(f"{base}/v1/models")["data"][0]["id"]
     n_ctx = props.get("default_generation_settings", {}).get("n_ctx") or props.get("n_ctx")
     print(f"Model: {model}   context per slot: {n_ctx}   modalities: {props.get('modalities')}")
-    print("VRAM idle:", ", ".join(f"GPU{g['gpu']} {g['used_mib']}/{g['total_mib']} MiB" for g in vram()) or "n/a")
+    print("Memory idle:", mem_summary(vram()) if has_gpu else ram())
 
     results: dict[str, Any] = {"model": model, "n_ctx": n_ctx, "runs": [], "checks": {}}
-    print(f"\n{'prompt':>8} {'pp tok/s':>9} {'gen tok/s':>10} {'TTFT s':>7}  VRAM MiB per GPU")
-    for size in (int(s) for s in args.sizes.split(",")):
-        if n_ctx and size + args.gen > n_ctx:
+    print(f"\n{'prompt':>8} {'pp tok/s':>9} {'gen tok/s':>10} {'TTFT s':>7}  memory")
+    for size in (int(s) for s in sizes.split(",")):
+        if n_ctx and size + gen > n_ctx:
             print(f"{size:>8}  skipped (exceeds context {n_ctx})")
             continue
-        r = bench_size(base, model, size, args.gen)
+        r = bench_size(base, model, size, gen)
         results["runs"].append(r)
-        mem = " ".join(f"{g['used_mib']}" for g in r["vram"]) or "n/a"
+        mem = mem_summary(r["vram"])
         print(f"{r['prompt_tokens']:>8} {r['prompt_tok_s']:>9} {r['gen_tok_s']:>10} {r['ttft_s']:>7}  {mem}")
 
     print()

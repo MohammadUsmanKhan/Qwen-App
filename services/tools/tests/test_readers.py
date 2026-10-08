@@ -45,7 +45,7 @@ def test_docx_fallback_when_docling_down(tmp_path: Path) -> None:
     assert ex.method == "fallback"
     assert "# Quarterly Review" in ex.markdown
     assert "| North | 120 |" in ex.markdown
-    assert any("fallback" in n for n in ex.notes)
+    assert any("built-in reader" in n for n in ex.notes)
 
 
 def test_pptx_fallback_includes_notes(tmp_path: Path) -> None:
@@ -74,3 +74,15 @@ def test_image_without_docling_reports_error(tmp_path: Path) -> None:
     with pytest.raises(ToolError) as e:
         run(p)
     assert e.value.code == "extraction_failed"
+
+
+def test_docling_disabled_uses_builtin_reader_immediately(tmp_path: Path) -> None:
+    p = tmp_path / "review.docx"
+    p.write_bytes(docx_bytes())
+    ex = asyncio.run(extract(p, p.name, docling_url="", docling_timeout=2))
+    assert ex.method == "fallback" and "# Quarterly Review" in ex.markdown
+    img = tmp_path / "photo.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n")
+    with pytest.raises(ToolError) as e:
+        asyncio.run(extract(img, img.name, docling_url="", docling_timeout=2))
+    assert "attach it" in e.value.hint
